@@ -18,14 +18,12 @@ import json
 import logging
 import logging.config
 import re
-
-import six
 from socket import inet_pton
 
-from matrix_client.errors import MatrixRequestError
+import six
 import yaml
-
 from matrix_client.client import MatrixClient
+from matrix_client.errors import MatrixRequestError
 
 logger = logging.getLogger("vdh_matrix.bot")
 
@@ -39,6 +37,16 @@ class Bot(object):
         )
         # map from room id to RoomListener
         self._listeners = {}
+
+        # we need federation format events.
+        self._client.sync_filter = json.dumps({
+            'room': {
+                'timeline': {
+                    'limit': 20,
+                }
+            },
+            'event_format': 'federation',
+        })
 
         for room in self._client.rooms.values():
             self._add_room_listener(room)
@@ -238,4 +246,3 @@ if __name__ == '__main__':
         config = yaml.load(conf)
     bot = Bot(config)
     bot.run()
-

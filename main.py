@@ -49,7 +49,7 @@ class Bot(object):
         logger.info('Bot started.')
 
     def _on_event(self, event):
-        if not self._listeners[event['room_id']]:
+        if event['room_id'] not in self._listeners:
             self._add_room_listener(self._client.rooms[event['room_id']])
 
     def _add_room_listener(self, room):

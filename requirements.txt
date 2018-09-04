@@ -1,0 +1,3 @@
+six
+PyYAML
+matrix-client==0.3.2

@@ -19,6 +19,7 @@ import logging
 import logging.config
 import re
 from socket import inet_pton
+from time import sleep
 
 import six
 import yaml
@@ -72,7 +73,8 @@ class Bot(object):
 
     @staticmethod
     def _sync_exception_handler(exception):
-        logger.warning(exception)
+        # sleep to avoid tight-looping when synapse is down
+        sleep(5)
 
 
 class RoomListener(object):

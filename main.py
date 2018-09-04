@@ -16,6 +16,7 @@
 import itertools
 import json
 import logging
+import logging.config
 import re
 
 import six
@@ -231,9 +232,9 @@ def is_ip_address(server_name):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
-    logging.getLogger('urllib3').setLevel(logging.INFO)
-    with open('config.yaml') as conf:
+    with open('log_config.yaml', 'r') as f:
+        logging.config.dictConfig(yaml.load(f))
+    with open('config.yaml', 'r') as conf:
         config = yaml.load(conf)
     bot = Bot(config)
     bot.run()

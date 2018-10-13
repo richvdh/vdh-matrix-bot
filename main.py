@@ -10,21 +10,21 @@
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+a# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import itertools
 import json
-import logging
 import logging.config
 import re
+import socket
 from socket import inet_pton
 from time import sleep
 
-import six
-import yaml
 from matrix_client.client import MatrixClient
 from matrix_client.errors import MatrixRequestError
+import six
+import yaml
 
 logger = logging.getLogger("vdh_matrix.bot")
 
@@ -235,7 +235,7 @@ def _glob_to_regex(glob):
 
 def is_ip_address(server_name):
     try:
-        inet_pton(server_name)
+        inet_pton(socket.AF_INET, server_name)
         return True
     except ValueError:
         return False

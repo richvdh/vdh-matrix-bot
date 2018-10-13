@@ -91,7 +91,6 @@ class RoomListener(object):
         self._acl = self._get_acl_event()
         if self._acl is not None:
             logger.info('acl in %s: %s', self._room.room_id, self._acl)
-        room.add_state_listener(self._on_state_event)
         room.add_state_listener(self._on_acl_event, 'm.room.server_acl')
         room.add_listener(self._on_event)
 
@@ -111,14 +110,8 @@ class RoomListener(object):
                     return None
             raise
 
-    def _on_state_event(self, event):
+    def _recheck_acl(self):
         # check if the ACL has been reset
-        logger.info(
-            "Got state event in %s; re-checking ACL",
-            event['event_id'],
-            self._room.room_id,
-        )
-
         current_acl = self._get_acl_event()
         if current_acl != self._acl:
             logger.warning(
@@ -131,8 +124,10 @@ class RoomListener(object):
             self._acl = current_acl
 
     def _on_event(self, _room, event):
+        self._recheck_acl()
+
         event_id = event['event_id']
-        logger.info("Checking acl for %s in %s", event_id, self._room.room_id)
+        logger.debug("Checking acl for %s in %s", event_id, self._room.room_id)
         origin_server = get_origin_server_name(event_id)
 
         # determine if this event violates the ACL
@@ -245,7 +240,7 @@ def server_matches_acl(server_name, acl):
         allow = []
     for e in allow:
         if _acl_entry_matches(server_name, e):
-            logger.info("%s matched allow rule %s", server_name, e)
+            logger.debug("%s matched allow rule %s", server_name, e)
             return True
 
     # everything else should be rejected.

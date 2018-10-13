@@ -237,6 +237,8 @@ def is_ip_address(server_name):
     try:
         inet_pton(socket.AF_INET, server_name)
         return True
+    except socket.error:
+        return False
     except ValueError:
         return False
 

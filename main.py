@@ -13,6 +13,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import copy
 import itertools
 import json
 import logging.config
@@ -90,6 +91,7 @@ class RoomListener(object):
         self._acl = self._get_acl_event()
         if self._acl is not None:
             logger.info('acl in %s: %s', self._room.room_id, self._acl)
+        room.add_state_listener(self._on_state_event)
         room.add_state_listener(self._on_acl_event, 'm.room.server_acl')
         room.add_listener(self._on_event)
 
@@ -109,8 +111,28 @@ class RoomListener(object):
                     return None
             raise
 
+    def _on_state_event(self, event):
+        # check if the ACL has been reset
+        logger.info(
+            "Got state event in %s; re-checking ACL",
+            event['event_id'],
+            self._room.room_id,
+        )
+
+        current_acl = self._get_acl_event()
+        if current_acl != self._acl:
+            logger.warning(
+                "ACL appears to have been state-reset in %s: now %s",
+                self._room.room_id,
+                current_acl,
+            )
+
+            # TODO: put it back.
+            self._acl = current_acl
+
     def _on_event(self, _room, event):
         event_id = event['event_id']
+        logger.info("Checking acl for %s in %s", event_id, self._room.room_id)
         origin_server = get_origin_server_name(event_id)
 
         # determine if this event violates the ACL
@@ -133,12 +155,33 @@ class RoomListener(object):
                         event_id,
                         self._room.room_id, prev, origin_server,
                     )
+                    self.add_server_to_acl(origin_server)
 
     def _on_acl_event(self, state_event):
         logger.info(
             'acl event in %s: %s', self._room.room_id, state_event['content'],
         )
         self._acl = state_event['content']
+
+    def add_server_to_acl(self, server_name):
+        newacl = copy.deepcopy(self._acl)
+        newacl.setdefault("deny", []).extend(server_name)
+        self.set_acl(newacl)
+
+    def set_acl(self, newacl):
+        logger.info('setting new ACL in %s: %s', self._room.room_id, newacl)
+        try:
+            self._api.send_state_event(
+                self._room.room_id,
+                "m.room.server_acl",
+                content=newacl,
+            )
+            logger.info("Set new ACL successfully")
+            self._acl = newacl
+        except Exception as e:
+            logger.warning(
+                "Unable to set ACL in %s: %s", self._room.room_id, e,
+            )
 
 
 def get_origin_server_name(event_id):

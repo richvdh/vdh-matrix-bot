@@ -30,13 +30,46 @@ import yaml
 logger = logging.getLogger("vdh_matrix.bot")
 
 
+class BotMatrixClient(MatrixClient):
+    def __init__(self, *args, **kwargs):
+        # inhibit the initial sync duriing init.
+        self._inhibit_sync = True
+        super(BotMatrixClient, self).__init__(*args, **kwargs)
+        self._inhibit_sync = False
+
+        self._new_room_listeners = []
+        self._sync_loop_listeners = []
+
+    def _sync(self, *args, **kwargs):
+        if self._inhibit_sync:
+            return
+        sync_token = self.sync_token
+        result = super(BotMatrixClient, self)._sync(*args, **kwargs)
+        for listener in self._sync_loop_listeners:
+            listener(sync_token)
+        return result
+
+    def _mkroom(self, room_id):
+        room = super(BotMatrixClient, self)._mkroom(room_id)
+
+        for listener in self._new_room_listeners:
+            listener(room)
+
+    def add_new_room_listener(self, listener):
+        self._new_room_listeners.append(listener)
+
+    def add_sync_loop_listener(self, listener):
+        self._sync_loop_listeners.append(listener)
+
+
 class Bot(object):
     def __init__(self, config):
-        self._client = MatrixClient(
+        self._client = BotMatrixClient(
             config['hs_url'],
             token=config['access_token'],
             user_id=config['user_id'],
         )
+
         # map from room id to RoomListener
         self._listeners = {}
 
@@ -50,27 +83,24 @@ class Bot(object):
             'event_format': 'federation',
         })
 
-        for room in self._client.rooms.values():
-            self._add_room_listener(room)
-
-        self._client.add_listener(self._on_event)
+        self._client.add_new_room_listener(self._on_new_room)
+        self._client.add_sync_loop_listener(self._on_sync_loop)
 
     def run(self):
         self._client.listen_forever(exception_handler=self._sync_exception_handler)
         logger.info('Bot started.')
 
-    def _on_event(self, event):
-        if event['room_id'] not in self._listeners:
-            self._add_room_listener(self._client.rooms[event['room_id']])
-
-    def _add_room_listener(self, room):
+    def _on_new_room(self, room):
         """
         Args:
             room (matrix_client.room.Room):
         """
         logger.info('Adding listener for room %s', room.room_id)
-        rl = RoomListener(room)
-        self._listeners[room.room_id] = rl
+        self._listeners[room.room_id] = RoomListener(room)
+
+    def _on_sync_loop(self, sync_token):
+        for l in self._listeners.values():
+            l.on_sync_loop()
 
     @staticmethod
     def _sync_exception_handler(exception):
@@ -87,12 +117,17 @@ class RoomListener(object):
         self._room = room
         self._api = room.client.api
         self._violating_events = set()
+        self._acl = None
+        self._has_initial_synced = False
 
-        self._acl = self._get_acl_event()
-        if self._acl is not None:
-            logger.info('acl in %s: %s', self._room.room_id, self._acl)
         room.add_state_listener(self._on_acl_event, 'm.room.server_acl')
         room.add_listener(self._on_event)
+
+
+    def on_sync_loop(self):
+        # after we've done an initial sync on each room, enable the
+        # state-reset checks.
+        self._has_initial_synced = True
 
     def _get_acl_event(self):
         try:
@@ -112,6 +147,9 @@ class RoomListener(object):
 
     def _recheck_acl(self):
         # check if the ACL has been reset
+        if self._acl is None:
+            return
+
         current_acl = self._get_acl_event()
         if current_acl != self._acl:
             logger.warning(
@@ -124,7 +162,8 @@ class RoomListener(object):
             self._acl = current_acl
 
     def _on_event(self, _room, event):
-        self._recheck_acl()
+        if self._has_initial_synced:
+            self._recheck_acl()
 
         event_id = event['event_id']
         logger.debug("Checking acl for %s in %s", event_id, self._room.room_id)
@@ -159,8 +198,15 @@ class RoomListener(object):
         self._acl = state_event['content']
 
     def add_server_to_acl(self, server_name):
+        our_server_name = self._room.client.user_id.split(":", 1)[1]
+        if server_name == our_server_name:
+            logger.warn(
+                "Cowardly refusing to set an ACL on our own server %s",
+                server_name,
+            )
+            return
         newacl = copy.deepcopy(self._acl)
-        newacl.setdefault("deny", []).extend(server_name)
+        newacl.setdefault("deny", []).append(server_name)
         self.set_acl(newacl)
 
     def set_acl(self, newacl):

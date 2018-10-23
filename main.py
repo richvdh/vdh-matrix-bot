@@ -27,6 +27,10 @@ from matrix_client.errors import MatrixRequestError
 import six
 import yaml
 
+# events sent fewer than this many seconds after the ACL event will be
+# tolerated
+ACL_VIOLATION_GRACE_SECONDS = 60
+
 logger = logging.getLogger("vdh_matrix.bot")
 
 
@@ -115,19 +119,22 @@ class RoomListener(object):
             room (matrix_client.room.Room):
         """
         self._room = room
-        self._api = room.client.api
+        self._api = room.client.api  # type: matrix_client.api.MatrixHttpApi
         self._violating_events = set()
-        self._acl = None
-        self._has_initial_synced = False
+        self._acl_event = None
+
+        # set to True to indicate we should check for state resets after
+        # processing the current sync.
+        self._recheck_flag = False
 
         room.add_state_listener(self._on_acl_event, 'm.room.server_acl')
         room.add_listener(self._on_event)
 
 
     def on_sync_loop(self):
-        # after we've done an initial sync on each room, enable the
-        # state-reset checks.
-        self._has_initial_synced = True
+        if self._recheck_flag:
+            self._recheck_acl()
+            self._recheck_flag = False
 
     def _get_acl_event(self):
         try:
@@ -147,33 +154,51 @@ class RoomListener(object):
 
     def _recheck_acl(self):
         # check if the ACL has been reset
-        if self._acl is None:
+        if self._acl_event is None:
             return
 
+        logger.debug("Checking for state-resets in %s", self._room.room_id)
         current_acl = self._get_acl_event()
-        if current_acl != self._acl:
+        if current_acl != self._acl_event["content"]:
             logger.warning(
-                "ACL appears to have been state-reset in %s: now %s",
+                "ACL appears to have been state-reset in %s: now %s (was %s)",
                 self._room.room_id,
-                current_acl,
+                current_acl, self._acl_event["content"],
             )
 
             # TODO: put it back.
-            self._acl = current_acl
+
+            # now we have to get the whole room state, so that we can get the
+            # full ACL event :/
+            s = self._api.get_room_state(self._room.room_id)
+            for e in s:
+                if e.type == 'm.room.server_acl' and e.state_key == '':
+                    self._acl_event = e
+                    break
 
     def _on_event(self, _room, event):
-        if self._has_initial_synced:
-            self._recheck_acl()
-
         event_id = event['event_id']
         logger.debug("Checking acl for %s in %s", event_id, self._room.room_id)
         origin_server = get_origin_server_name(event_id)
 
         # determine if this event violates the ACL
-        if self._acl and not server_matches_acl(origin_server, self._acl):
-            logger.warning(
-                'event %s in %s violates ACL', event_id, self._room.room_id,
+        if self._acl_event and not server_matches_acl(
+            origin_server, self._acl_event["content"],
+        ):
+            ts_delta = (
+                event["origin_server_ts"] - self._acl_event["orgin_server_ts"]
             )
+            if ts_delta < ACL_VIOLATION_GRACE_SECONDS * 1000:
+                logger.info(
+                    'event %s in %s violates ACL, but it was only sent %ims'
+                    'after the ACL',
+                    event_id, self._room.room_id, ts_delta,
+                )
+            else:
+                logger.info(
+                    'event %s in %s violates ACL',
+                    event_id, self._room.room_id,
+                )
             self._violating_events.add(event_id)
         else:
             # see if this event's prev_events or auth_events reference a
@@ -191,11 +216,13 @@ class RoomListener(object):
                     )
                     self.add_server_to_acl(origin_server)
 
+        self._recheck_flag = True
+
     def _on_acl_event(self, state_event):
         logger.info(
             'acl event in %s: %s', self._room.room_id, state_event['content'],
         )
-        self._acl = state_event['content']
+        self._acl_event = state_event
 
     def add_server_to_acl(self, server_name):
         our_server_name = self._room.client.user_id.split(":", 1)[1]
@@ -205,7 +232,7 @@ class RoomListener(object):
                 server_name,
             )
             return
-        newacl = copy.deepcopy(self._acl)
+        newacl = copy.deepcopy(self._acl_event["content"])
         newacl.setdefault("deny", []).append(server_name)
         self.set_acl(newacl)
 
@@ -218,7 +245,6 @@ class RoomListener(object):
                 content=newacl,
             )
             logger.info("Set new ACL successfully")
-            self._acl = newacl
         except Exception as e:
             logger.warning(
                 "Unable to set ACL in %s: %s", self._room.room_id, e,

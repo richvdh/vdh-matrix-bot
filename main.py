@@ -172,7 +172,7 @@ class RoomListener(object):
             # full ACL event :/
             s = self._api.get_room_state(self._room.room_id)
             for e in s:
-                if e.type == 'm.room.server_acl' and e.state_key == '':
+                if e['type'] == 'm.room.server_acl' and e['state_key'] == '':
                     self._acl_event = e
                     break
 

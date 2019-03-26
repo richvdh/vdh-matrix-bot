@@ -186,7 +186,7 @@ class RoomListener(object):
             origin_server, self._acl_event["content"],
         ):
             ts_delta = (
-                event["origin_server_ts"] - self._acl_event["orgin_server_ts"]
+                event["origin_server_ts"] - self._acl_event["origin_server_ts"]
             )
             if ts_delta < ACL_VIOLATION_GRACE_SECONDS * 1000:
                 logger.info(
